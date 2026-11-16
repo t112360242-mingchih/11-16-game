@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Taiwan Racing</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: rgba(15, 23, 42, 0.75);
+        --panel-border: rgba(148, 163, 184, 0.4);
+        --text: #e2e8f0;
+        --accent: #f59e0b;
+        --accent-2: #38bdf8;
+        --success: #34d399;
+        --danger: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(180deg, #082f49 0%, #0f172a 100%);
+        color: var(--text);
+        font-family: Arial, Helvetica, sans-serif;
+      }
+
+      .game-shell {
+        width: min(92vw, 520px);
+        background: var(--panel);
+        border: 2px solid var(--panel-border);
+        border-radius: 18px;
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.6);
+        padding: 18px;
+      }
+
+      .hud {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: bold;
+        margin-bottom: 12px;
+        font-size: 1rem;
+      }
+
+      .score-box {
+        background: rgba(15, 23, 42, 0.7);
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+      }
+
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: linear-gradient(180deg, #7dd3fc 0%, #bae6fd 28%, #dbeafe 55%, #f8fafc 100%);
+        border-radius: 12px;
+        border: 2px solid rgba(148, 163, 184, 0.5);
+      }
+
+      .controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 12px;
+        gap: 12px;
+      }
+
+      .hint {
+        color: #cbd5e1;
+        font-size: 0.92rem;
+      }
+
+      .restart-btn {
+        border: none;
+        background: linear-gradient(135deg, var(--accent), #f97316);
+        color: white;
+        font-weight: bold;
+        padding: 10px 16px;
+        border-radius: 999px;
+        cursor: pointer;
+        box-shadow: 0 8px 18px rgba(249, 115, 22, 0.35);
+      }
+
+      .restart-btn:hover {
+        filter: brightness(1.08);
+      }
+
+      @media (max-width: 420px) {
+        .hud, .controls {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="game-shell">
+      <div class="hud">
+        <div class="score-box">Score: <span id="score">0</span></div>
+        <div class="score-box">Best: <span id="best">0</span></div>
+      </div>
+
+      <canvas id="gameCanvas" width="460" height="700"></canvas>
+
+      <div class="controls">
+        <div class="hint">Use ← → or A / D to steer</div>
+        <button class="restart-btn" id="restartBtn">Restart</button>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      const scoreEl = document.getElementById('score');
+      const bestEl = document.getElementById('best');
+      const restartBtn = document.getElementById('restartBtn');
+
+      const road = {
+        x: 112,
+        width: 236,
+        laneCount: 3,
+        laneWidth: 78,
+      };
+
+      let keys = { left: false, right: false };
+      let lastTime = 0;
+      let gameOver = false;
+      let score = 0;
+      let bestScore = Number(localStorage.getItem('taiwan-racing-best') || 0);
+      let spawnTimer = 0;
+      let coinTimer = 0;
+      let distance = 0;
+      let roadSpeed = 240;
+
+      const player = {
+        lane: 1,
+        x: 0,
+        y: 590,
+        width: 42,
+        height: 72,
+        color: '#f43f5e',
+      };
+
+      let obstacles = [];
+      let pickups = [];
+
+      function resetPlayerPosition() {
+        player.x = road.x + road.laneWidth * (player.lane + 0.5);
+      }
+
+      function resetGame() {
+        obstacles = [];
+        pickups = [];
+        spawnTimer = 0.9;
+        coinTimer = 1.5;
+        gameOver = false;
+        score = 0;
+        distance = 0;
+        roadSpeed = 240;
+        player.lane = 1;
+        resetPlayerPosition();
+        updateHud();
+      }
+
+      function updateHud() {
+        scoreEl.textContent = Math.floor(score);
+        bestEl.textContent = Math.floor(bestScore);
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+      }
+
+      function randomBetween(min, max) {
+        return min + Math.random() * (max - min);
+      }
+
+      function laneCenter(laneIndex) {
+        return road.x + road.laneWidth * (laneIndex + 0.5);
+      }
+
+      function spawnObstacle() {
+        const lane = Math.floor(Math.random() * road.laneCount);
+        const isScooter = Math.random() < 0.45;
+        const width = isScooter ? 34 : 42;
+        const height = isScooter ? 58 : 74;
+
+        obstacles.push({
+          lane,
+          x: laneCenter(lane),
+          y: -height - 10,
+          width,
+          height,
+          speed: roadSpeed + randomBetween(40, 120),
+          type: isScooter ? 'scooter' : 'car',
+        });
+      }
+
+      function spawnPickup() {
+        const lane = Math.floor(Math.random() * road.laneCount);
+        pickups.push({
+          lane,
+          x: laneCenter(lane),
+          y: -24,
+          radius: 12,
+          type: 'coin',
+          pulse: Math.random() * Math.PI * 2,
+        });
+      }
+
+      function movePlayer() {
+        const targetX = laneCenter(player.lane);
+        player.x += (targetX - player.x) * 0.2;
+      }
+
+      function handleInput() {
+        if (keys.left) {
+          player.lane = Math.max(0, player.lane - 1);
+          keys.left = false;
+        }
+
+        if (keys.right) {
+          player.lane = Math.min(road.laneCount - 1, player.lane + 1);
+          keys.right = false;
+        }
+      }
+
+      function update(dt) {
+        if (gameOver) {
+          return;
+        }
+
+        handleInput();
+        movePlayer();
+
+        roadSpeed += dt * 5;
+        distance += dt * roadSpeed * 0.9;
+        score += dt * 18 + (roadSpeed / 1000);
+
+        spawnTimer -= dt;
+        coinTimer -= dt;
+
+        if (spawnTimer <= 0) {
+          spawnObstacle();
+          spawnTimer = clamp(1.2 - roadSpeed / 700, 0.52, 1.1);
+        }
+
+        if (coinTimer <= 0) {
+          spawnPickup();
+          coinTimer = randomBetween(1.1, 2.4);
+        }
+
+        for (const obstacle of obstacles) {
+          obstacle.y += (obstacle.speed + roadSpeed * 0.8) * dt;
+          obstacle.x = laneCenter(obstacle.lane);
+        }
+
+        for (const pickup of pickups) {
+          pickup.y += (roadSpeed + 180) * dt;
+          pickup.pulse += dt * 8;
+        }
+
+        obstacles = obstacles.filter((obstacle) => obstacle.y < canvas.height + 120);
+        pickups = pickups.filter((pickup) => pickup.y < canvas.height + 40);
+
+        checkCollisions();
+        updateHud();
+      }
+
+      function checkCollisions() {
+        const playerBox = {
+          left: player.x - player.width / 2,
+          right: player.x + player.width / 2,
+          top: player.y - player.height / 2,
+          bottom: player.y + player.height / 2,
+        };
+
+        for (const obstacle of obstacles) {
+          const obstacleBox = {
+            left: obstacle.x - obstacle.width / 2,
+            right: obstacle.x + obstacle.width / 2,
+            top: obstacle.y,
+            bottom: obstacle.y + obstacle.height,
+          };
+
+          const hit = !(
+            playerBox.right < obstacleBox.left ||
+            playerBox.left > obstacleBox.right ||
+            playerBox.bottom < obstacleBox.top ||
+            playerBox.top > obstacleBox.bottom
+          );
+
+          if (hit) {
+            endGame();
+            return;
+          }
+        }
+
+        for (const pickup of pickups) {
+          const dx = player.x - pickup.x;
+          const dy = player.y - pickup.y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < player.width * 0.7) {
+            score += 25;
+            pickup.collected = true;
+          }
+        }
+
+        pickups = pickups.filter((pickup) => !pickup.collected);
+      }
+
+      function endGame() {
+        gameOver = true;
+        bestScore = Math.max(bestScore, Math.floor(score));
+        localStorage.setItem('taiwan-racing-best', String(bestScore));
+        updateHud();
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = '#8dd7ff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#9ad9a8';
+        ctx.beginPath();
+        ctx.moveTo(0, 220);
+        ctx.lineTo(120, 150);
+        ctx.lineTo(170, 200);
+        ctx.lineTo(260, 120);
+        ctx.lineTo(340, 180);
+        ctx.lineTo(460, 140);
+        ctx.lineTo(460, 260);
+        ctx.lineTo(0, 260);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#dbeafe';
+        ctx.fillRect(0, 260, canvas.width, 110);
+
+        ctx.fillStyle = '#d1d5db';
+        ctx.fillRect(0, 365, canvas.width, 10);
+
+        ctx.fillStyle = '#1e293b';
+        for (let i = 0; i < 8; i++) {
+          const x = 18 + i * 55;
+          const h = 40 + (i % 3) * 15;
+          ctx.fillRect(x, 300 - h, 32, h);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fillRect(x + 8, 300 - h + 10, 16, 6);
+          ctx.fillRect(x + 8, 300 - h + 24, 16, 6);
+          ctx.fillStyle = '#1e293b';
+        }
+
+        const roadTop = 330;
+        const roadHeight = 370;
+
+        ctx.fillStyle = '#2b2f34';
+        ctx.fillRect(road.x, roadTop, road.width, roadHeight);
+
+        ctx.fillStyle = '#f8fafc';
+        for (let i = 1; i < road.laneCount; i++) {
+          const x = road.x + i * road.laneWidth;
+          for (let y = -40; y < roadHeight + 50; y += 40) {
+            ctx.fillRect(x - 4, roadTop + y + (distance % 40), 8, 22);
+          }
+        }
+
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(road.x - 12, roadTop, 10, roadHeight);
+        ctx.fillRect(road.x + road.width + 2, roadTop, 10, roadHeight);
+
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(road.x - 20, roadTop + 12, 6, 60);
+        ctx.fillRect(road.x + road.width + 14, roadTop + 12, 6, 60);
+        ctx.fillRect(road.x - 20, roadTop + 120, 6, 60);
+        ctx.fillRect(road.x + road.width + 14, roadTop + 120, 6, 60);
+      }
+
+      function drawPlayer() {
+        const x = player.x;
+        const y = player.y;
+        const w = player.width;
+        const h = player.height;
+
+        ctx.fillStyle = '#f97316';
+        ctx.fillRect(x - w / 2, y - h / 2 + 14, w, h - 14);
+
+        ctx.fillStyle = '#f43f5e';
+        ctx.fillRect(x - w / 2 + 6, y - h / 2 + 6, w - 12, 22);
+
+        ctx.fillStyle = '#111827';
+        ctx.fillRect(x - w / 2 + 8, y - h / 2 + 18, 7, 18);
+        ctx.fillRect(x + w / 2 - 15, y - h / 2 + 18, 7, 18);
+        ctx.fillRect(x - w / 2 + 8, y + h / 2 - 26, 7, 18);
+        ctx.fillRect(x + w / 2 - 15, y + h / 2 - 26, 7, 18);
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(x - w / 2 + 5, y - h / 2 + 5, 10, 10);
+        ctx.fillRect(x + w / 2 - 15, y - h / 2 + 5, 10, 10);
+      }
+
+      function drawObstacle(obstacle) {
+        const x = obstacle.x;
+        const y = obstacle.y;
+
+        if (obstacle.type === 'scooter') {
+          ctx.fillStyle = '#334155';
+          ctx.fillRect(x - 12, y, 24, 48);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fillRect(x - 16, y + 8, 32, 14);
+          ctx.fillStyle = '#facc15';
+          ctx.fillRect(x - 8, y + 42, 16, 8);
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(x - 18, y + 8, 6, 26);
+          ctx.fillRect(x + 12, y + 8, 6, 26);
+        } else {
+          ctx.fillStyle = '#3b82f6';
+          ctx.fillRect(x - obstacle.width / 2, y, obstacle.width, obstacle.height);
+          ctx.fillStyle = '#e2e8f0';
+          ctx.fillRect(x - 12, y + 12, 24, 18);
+          ctx.fillStyle = '#111827';
+          ctx.fillRect(x - 14, y + 8, 8, 20);
+          ctx.fillRect(x + 6, y + 8, 8, 20);
+          ctx.fillRect(x - 14, y + obstacle.height - 22, 8, 20);
+          ctx.fillRect(x + 6, y + obstacle.height - 22, 8, 20);
+        }
+      }
+
+      function drawPickup(pickup) {
+        const radius = pickup.radius;
+        const x = pickup.x;
+        const y = pickup.y;
+        const pulse = Math.sin(pickup.pulse) * 2;
+
+        ctx.save();
+        ctx.translate(x, y + pulse);
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.moveTo(0, -radius);
+        ctx.lineTo(radius * 0.7, 0);
+        ctx.lineTo(0, radius);
+        ctx.lineTo(-radius * 0.7, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawGameOver() {
+        if (!gameOver) return;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 36px Arial';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 14);
+
+        ctx.font = '20px Arial';
+        ctx.fillStyle = '#facc15';
+        ctx.fillText('Final Score: ' + Math.floor(score), canvas.width / 2, canvas.height / 2 + 24);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText('Press Restart to race again', canvas.width / 2, canvas.height / 2 + 56);
+      }
+
+      function render() {
+        drawBackground();
+
+        for (const pickup of pickups) {
+          drawPickup(pickup);
+        }
+
+        for (const obstacle of obstacles) {
+          drawObstacle(obstacle);
+        }
+
+        drawPlayer();
+        drawGameOver();
+      }
+
+      function gameLoop(timestamp) {
+        const dt = Math.min((timestamp - lastTime) / 1000 || 0.016, 0.032);
+        lastTime = timestamp;
+
+        update(dt);
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      document.addEventListener('keydown', (event) => {
+        const key = event.key.toLowerCase();
+
+        if (key === 'arrowleft' || key === 'a') {
+          event.preventDefault();
+          keys.left = true;
+        }
+
+        if (key === 'arrowright' || key === 'd') {
+          event.preventDefault();
+          keys.right = true;
+        }
+
+        if (gameOver && (key === 'enter' || key === 'r')) {
+          resetGame();
+        }
+      });
+
+      restartBtn.addEventListener('click', resetGame);
+
+      resetGame();
+      requestAnimationFrame(gameLoop);
+    </script>
+  </body>
+</html>
